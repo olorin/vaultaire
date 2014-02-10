@@ -12,6 +12,7 @@
 {-# LANGUAGE InstanceSigs      #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PackageImports    #-}
+{-# LANGUAGE BangPatterns    #-}
 {-# OPTIONS -fno-warn-type-defaults #-}
 
 module Vaultaire.Persistence.BucketObject (
@@ -27,7 +28,10 @@ import Blaze.ByteString.Builder
 import Control.Exception
 import "mtl" Control.Monad.Error ()
 import Control.Monad.IO.Class
+import Control.Monad
+import Control.Applicative
 import Data.ByteString (ByteString)
+import Data.Time.Clock
 import qualified Data.ByteString.Char8 as S
 import Data.Char
 import Data.Locator
@@ -36,6 +40,8 @@ import qualified Data.Map.Strict as Map
 import Data.Serialize
 import Data.Word
 import System.Rados
+import Control.Concurrent.Async
+import Data.List
 
 import Vaultaire.Conversion.Reader
 import Vaultaire.Internal.CoreTypes
@@ -93,17 +99,43 @@ hashOriginName o' =
 --
 appendVaultPoints :: Map Label Builder -> Pool ()
 appendVaultPoints m = do
-    asyncs <- sequence $ Map.foldrWithKey asyncAppend [] m
-    mapM_ checkError asyncs
+    writes <- sequence $ Map.foldrWithKey asyncAppend [] m
+    liftIO $ do
+        asyncs <- forM writes $ \w -> async $ checkError w
+        times <- mapM wait asyncs
+        print (mean times)
+        putStrLn "Got acks:"
+        putStrLn $ "mean:     " ++ (show $ mean times)
+        putStrLn $ "median:   " ++ (show $ median times)
+        putStrLn $ "avgdev:   " ++ (show $ avgdev times)
   where
     asyncAppend (Label l') bB as =
         (runAsync . runObject l' $ append $ toByteString bB) : as
 
     checkError write_in_flight = do
+        start <- liftIO getCurrentTime
         maybe_error <- waitSafe write_in_flight
         case maybe_error of
             Just err    -> liftIO $ throwIO err
-            Nothing     -> return ()
+            Nothing     -> liftIO $ do
+                end <- liftIO getCurrentTime
+                return . fromRational . toRational $ diffUTCTime end start
+
+    avgdev :: (Floating a) => [a] -> a
+    avgdev xs = mean $ map (\x -> abs(x - m)) xs
+        where
+                m = mean xs
+
+    mean :: Floating a => [a] -> a
+    mean x = fst $ foldl' (\(!m, !n) x -> (m+(x-m)/(n+1),n+1)) (0,0) x
+
+    median :: (Floating a, Ord a) => [a] -> a
+    median x | odd n  = head  $ drop (n `div` 2) x'
+            | even n = mean $ take 2 $ drop i x'
+                    where i = (length x' `div` 2) - 1
+                          x' = sort x
+                          n  = length x
+
 
 {-
     This whole thing is a bit crazy. We should just merge it all into a single
