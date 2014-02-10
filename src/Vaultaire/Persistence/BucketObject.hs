@@ -105,7 +105,6 @@ appendVaultPoints m = do
     liftIO $ do
         asyncs <- forM writes $ \w -> async $ checkError w
         times <- mapM wait asyncs
-        print (mean times)
         putStrLn $ printf "%-10s %9.3f" ("mean:" :: String) ((mean times) :: Float)
         putStrLn $ printf "%-10s %9.3f" ("median:" :: String) ((median times) :: Float)
         putStrLn $ printf "%-10s %9.3f" ("avgdev:" :: String) ((avgdev times) :: Float)
