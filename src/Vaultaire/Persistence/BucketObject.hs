@@ -38,8 +38,10 @@ import Data.Locator
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Serialize
+import Text.Printf
 import Data.Word
 import System.Rados
+import System.IO (hFlush, stdout)
 import Control.Concurrent.Async
 import Data.List
 
@@ -104,10 +106,12 @@ appendVaultPoints m = do
         asyncs <- forM writes $ \w -> async $ checkError w
         times <- mapM wait asyncs
         print (mean times)
-        putStrLn "Got acks:"
-        putStrLn $ "mean:     " ++ (show $ mean times)
-        putStrLn $ "median:   " ++ (show $ median times)
-        putStrLn $ "avgdev:   " ++ (show $ avgdev times)
+        putStrLn $ printf "%-10s %9.3f" ("mean:" :: String) ((mean times) :: Float)
+        putStrLn $ printf "%-10s %9.3f" ("median:" :: String) ((median times) :: Float)
+        putStrLn $ printf "%-10s %9.3f" ("avgdev:" :: String) ((avgdev times) :: Float)
+        putStrLn $ printf "%-10s %9.3f" ("minimum:" :: String) ((minimum times) :: Float)
+        putStrLn $ printf "%-10s %9.3f" ("maximum:" :: String) ((maximum times) :: Float)
+        hFlush stdout
   where
     asyncAppend (Label l') bB as =
         (runAsync . runObject l' $ append $ toByteString bB) : as
