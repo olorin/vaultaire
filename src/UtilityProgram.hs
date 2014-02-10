@@ -41,8 +41,9 @@ import Vaultaire.Persistence.Constants
 import qualified Vaultaire.Persistence.ContentsObject as Contents
 
 data Options = Options {
-    optGlobalQuiet :: Bool,
-    optCommand     :: Command
+    optGlobalQuiet    :: Bool,
+    optGlobalPoolName :: String,
+    optCommand        :: Command
 }
 
 data Command =
@@ -62,6 +63,13 @@ toplevel = Options
             (long "verbose" <>
              short 'v' <>
              help "Include diagnostic information in output")
+    <*> strOption
+            (long "pool" <>
+             short 'p' <>
+             metavar "POOL" <>
+             value "vaultaire" <>
+             showDefault <>
+             help "Name of the Ceph pool metrics will be written to")
     <*> subparser
             (command "read" readParser <>
              command "contents" contentsParser)
@@ -120,8 +128,8 @@ handleSourceArgument arg =
   in
     SourceDict $ Map.fromList pairs
   where
-    toTag :: [ByteString] -> (Text, Text)
-    toTag [k',v'] = (T.pack $ S.unpack k', T.pack $ S.unpack v')
+    toTag :: [ByteString] -> (ByteString, ByteString)
+    toTag [k',v'] = (k',v')
     toTag _ = error "invalid source argument"
 
 
@@ -162,7 +170,10 @@ debug verbose x =
 -- Handle the different modes of operation
 --
 program :: Options -> IO ()
-program (Options verbose cmd) =
+program (Options verbose pool cmd) =
+  let
+    pool' = S.pack pool
+  in
     case cmd of
         ReadCommand o0 s0 t0   -> do
             let o = Origin (S.pack o0)
@@ -183,8 +194,8 @@ program (Options verbose cmd) =
             let s' = hashSourceDict s
             debug verbose $ Bucket.formObjectLabel o s' t
 
-            m <- runConnect Nothing (parseConfig "/etc/ceph/ceph.conf") $
-                runPool "test1" $ do
+            m <- runConnect (Just "vaultaire") (parseConfig "/etc/ceph/ceph.conf") $
+                runPool pool' $ do
                     Bucket.readVaultObject o s t
 
 --
@@ -199,8 +210,8 @@ program (Options verbose cmd) =
             o = Origin (S.pack o0)
             l = Contents.formObjectLabel o
           in do
-            e <- runConnect Nothing (parseConfig "/etc/ceph/ceph.conf") $
-                runPool "test1" $ do
+            e <- runConnect (Just "vaultaire") (parseConfig "/etc/ceph/ceph.conf") $
+                runPool pool' $ do
                     Contents.readVaultObject l
 
             traverse_ displaySource e

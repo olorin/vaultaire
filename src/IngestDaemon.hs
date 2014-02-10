@@ -49,10 +49,10 @@ import Vaultaire.Persistence.Constants
 import qualified Vaultaire.Persistence.ContentsObject as Contents
 
 data Options = Options {
-    optGlobalDebug   :: !Bool,
-    optGlobalWorkers :: !Int,
-    argBrokerHost    :: !String,
-    argPoolName      :: !String
+    optGlobalDebug    :: !Bool,
+    optGlobalWorkers  :: !Int,
+    argGlobalPoolName :: !String,
+    argBrokerHost     :: !String
 }
 
 -- This is how the broker will know to route all the way back to the client,
@@ -143,7 +143,7 @@ writer
     -> Mutexes
     -> IO ()
 writer pool' Mutexes{..} =
-    runConnect Nothing (parseConfig "/etc/ceph/ceph.conf") $
+    runConnect (Just "vaultaire") (parseConfig "/etc/ceph/ceph.conf") $
         runPool pool' $ forever $ do
             -- block until signalled to wake up
             liftIO $ takeMVar pending
@@ -175,7 +175,7 @@ writer pool' Mutexes{..} =
             t2 <- liftIO $ getCurrentTime
 
             let delta = diffUTCTime t2 t1
-            let v = printf "%5.3f" ((fromRational $ toRational delta) :: Float)
+            let v = printf "%9.3f" ((fromRational $ toRational delta) :: Float)
             output telemetry "delta" v
 
 
@@ -364,7 +364,7 @@ receiver broker Mutexes{..} d =
 
 
 program :: Options -> IO ()
-program (Options d w broker pool) = do
+program (Options d w pool broker) = do
     -- Incoming requests are given to worker threads via the work mvar
     msgV <- newEmptyMVar
 
@@ -426,14 +426,18 @@ toplevel = Options
              value num <>
              showDefault <>
              help "Number of bursts to process simultaneously")
+    <*> strOption
+            (long "pool" <>
+             short 'p' <>
+             metavar "POOL" <>
+             value "vaultaire" <>
+             showDefault <>
+             help "Name of the Ceph pool metrics will be written to")
     <*> argument str
             (metavar "BROKER" <>
              help "Host name or IP address of broker to pull from")
-    <*> argument str
-            (metavar "POOL" <>
-             help "Name of the Ceph pool metrics will be written to")
   where
-    num = unsafePerformIO $ GHC.Conc.getNumCapabilities
+    num = unsafePerformIO $ getNumCapabilities
 
 
 
