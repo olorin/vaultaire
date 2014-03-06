@@ -35,6 +35,7 @@ import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as S
 import Data.List.NonEmpty (fromList)
+import Data.List.Split (splitEvery)
 import qualified Data.Map.Strict as Map
 import Data.Time.Clock
 import GHC.Conc
@@ -67,7 +68,6 @@ data Reply = Reply {
     client   :: !ByteString, -- handled for us by the ROUTER socket, opaque.
     response :: !ByteString
 }
-
 
 data Mutexes = Mutexes {
     inbound   :: !(MVar [ByteString]),
@@ -148,8 +148,12 @@ contentsReader pool user Mutexes{..} = do
             d <- liftIO $ readMVar directory
             let flatten l m = (Map.keys m) ++ l
             let sources = map createSourceResponse (Map.foldl flatten [] d)
-            let burst = encodeSourceResponseBurst (createSourceResponseBurst sources)
-            liftIO $ writeChan contentsOut (Reply envelope client burst)
+            let sources' = splitEvery 1024 sources
+            let bursts = map (\s -> encodeSourceResponseBurst (createSourceResponseBurst s)) sources'
+            let nbursts = len bursts
+            let writeBurst b = writeChan contentsOut (Reply envelope client b) 
+            liftIO $ mapM_ writeBurst bursts
+            liftIO $ writeChan contentsOut (Reply envelope client S.empty)
     
 receiver
     :: String
@@ -206,10 +210,12 @@ receiver broker Mutexes{..} d = do
 
         linkThread . forever $ do
             msg <- Zero.receiveMulti contentsRouter
+            when d $ liftIO $ putStrLn $ "got contents request"
             liftIO $ putMVar contentsIn msg
 
         linkThread . forever $ do
             Reply{..} <- liftIO $ readChan contentsOut
+            when d $ liftIO $ putStrLn $ "sending contents reply"
             let reply = [envelope, client, response]
             Zero.sendMulti contentsRouter (fromList reply)
             
@@ -246,6 +252,8 @@ readerProgram (Options d w pool user broker) quitV = do
     -- Startup reader threads
     replicateM_ w $
         linkThread $ reader (S.pack pool) (S.pack user) u
+
+    linkThread $ contentsReader (S.pack pool) (S.pack user) u
 
 
     -- Startup communications threads
