@@ -42,14 +42,9 @@ func main() {
 	if err != nil {
 		Exitf(2, "Could not send: %v", uri, err)
 	}
-	for {
-		contents, err := sock.RecvBytes(0)
-		if err != nil {
-			fmt.Printf("Error reading contents: %v", err)
-		}
-		if string(contents[:]) == "" {
-			break
-		}
-		os.Stdout.Write(contents)
+	contents, err := sock.RecvBytes(0)
+	if err != nil {
+		fmt.Printf("Error reading contents: %v", err)
 	}
+	os.Stdout.Write(contents)
 }

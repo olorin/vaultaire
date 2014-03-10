@@ -35,7 +35,6 @@ import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as S
 import Data.List.NonEmpty (fromList)
-import Data.List.Split (splitEvery)
 import qualified Data.Map.Strict as Map
 import Data.Time.Clock
 import GHC.Conc
@@ -52,6 +51,7 @@ import Vaultaire.Conversion.Receiver
 import Vaultaire.Conversion.Transmitter
 import Vaultaire.Internal.CoreTypes
 import qualified Vaultaire.Persistence.BucketObject as Bucket
+import qualified Vaultaire.Persistence.ContentsObject as Contents
 
 #include "config.h"
 
@@ -75,8 +75,7 @@ data Mutexes = Mutexes {
     telemetry :: !(Chan (String,String,String)),
     directory :: !(MVar Directory),
     contentsIn :: !(MVar [ByteString]),
-    contentsOut :: !(Chan Reply),
-    storage :: !(MVar Storage)
+    contentsOut :: !(Chan Reply)
 }
 
 
@@ -145,17 +144,17 @@ contentsReader :: ByteString -> ByteString -> Mutexes -> IO ()
 contentsReader pool user Mutexes{..} = do
     Rados.runConnect (Just user) (Rados.parseConfig "/etc/ceph/ceph.conf") $
         Rados.runPool pool $ forever $ do
-            [envelope, client, origin, request] <- liftIO $ takeMVar contentsIn
-            d <- liftIO $ readMVar directory
+            [envelope, client, _, request] <- liftIO $ takeMVar contentsIn
+            d <- liftIO $ takeMVar directory
+            let origin = Origin request
+            let lbl = Contents.formObjectLabel origin
+            st <- Contents.readVaultObject lbl
+            let d' = insertIntoDirectory d origin st
+            liftIO $ putMVar directory d'
             let flatten l m = (Map.keys m) ++ l
-            let sources = map createSourceResponse (Map.foldl flatten [] d)
-            let nsources = length sources
-            liftIO $ putStrLn $ printf "bursts: %d" nsources
-            let sources' = splitEvery 1024 sources
-            let bursts = map (\s -> encodeSourceResponseBurst (createSourceResponseBurst s)) sources'
-            let writeBurst b = writeChan contentsOut (Reply envelope client b) 
-            liftIO $ mapM_ writeBurst bursts
-            liftIO $ writeChan contentsOut (Reply envelope client S.empty)
+            let sources = map createSourceResponse (Map.foldl flatten [] d')
+            let burst = encodeSourceResponseBurst (createSourceResponseBurst sources)
+            liftIO $ writeChan contentsOut (Reply envelope client burst)
     
 receiver
     :: String
@@ -212,16 +211,12 @@ receiver broker Mutexes{..} d = do
 
         linkThread . forever $ do
             msg <- Zero.receiveMulti contentsRouter
-            when d $ liftIO $ putStrLn $ "got contents request"
             liftIO $ putMVar contentsIn msg
 
         linkThread . forever $ do
             Reply{..} <- liftIO $ readChan contentsOut
-            when d $ liftIO $ putStrLn $ "sending contents reply"
-            when d $ liftIO $ putStrLn $ printf "sending %d bursts" (length (S.unpack response))
-            let reply = [envelope, client, response]
+            let reply = [envelope, client, (S.pack ""), response]
             Zero.sendMulti contentsRouter (fromList reply)
-            when d $ liftIO $ putStrLn $ "sent contents reply"
             
 
   where
@@ -244,16 +239,13 @@ readerProgram (Options d w pool user broker) quitV = do
 
     dV <- newMVar Map.empty
 
-    storageV <- newMVar (Storage Map.empty Map.empty [] 0)
-
     let u = Mutexes {
         inbound = msgV,
         outbound = outC,
         telemetry = telC,
         directory = dV,
         contentsIn = contentsV,
-        contentsOut = contentsC,
-        storage = storageV
+        contentsOut = contentsC
     }
 
     -- Startup reader threads
