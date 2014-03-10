@@ -150,7 +150,7 @@ contentsReader pool user Mutexes{..} = do
             let sources = map createSourceResponse (Map.foldl flatten [] d)
             let sources' = splitEvery 1024 sources
             let bursts = map (\s -> encodeSourceResponseBurst (createSourceResponseBurst s)) sources'
-            let nbursts = len bursts
+            let nbursts = length bursts
             let writeBurst b = writeChan contentsOut (Reply envelope client b) 
             liftIO $ mapM_ writeBurst bursts
             liftIO $ writeChan contentsOut (Reply envelope client S.empty)
