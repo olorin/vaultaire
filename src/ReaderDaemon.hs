@@ -75,7 +75,8 @@ data Mutexes = Mutexes {
     telemetry :: !(Chan (String,String,String)),
     directory :: !(MVar Directory),
     contentsIn :: !(MVar [ByteString]),
-    contentsOut :: !(Chan Reply)
+    contentsOut :: !(Chan Reply),
+    storage :: !(MVar Storage)
 }
 
 
@@ -148,9 +149,10 @@ contentsReader pool user Mutexes{..} = do
             d <- liftIO $ readMVar directory
             let flatten l m = (Map.keys m) ++ l
             let sources = map createSourceResponse (Map.foldl flatten [] d)
+            let nsources = length sources
+            liftIO $ putStrLn $ printf "bursts: %d" nsources
             let sources' = splitEvery 1024 sources
             let bursts = map (\s -> encodeSourceResponseBurst (createSourceResponseBurst s)) sources'
-            let nbursts = length bursts
             let writeBurst b = writeChan contentsOut (Reply envelope client b) 
             liftIO $ mapM_ writeBurst bursts
             liftIO $ writeChan contentsOut (Reply envelope client S.empty)
@@ -216,8 +218,10 @@ receiver broker Mutexes{..} d = do
         linkThread . forever $ do
             Reply{..} <- liftIO $ readChan contentsOut
             when d $ liftIO $ putStrLn $ "sending contents reply"
+            when d $ liftIO $ putStrLn $ printf "sending %d bursts" (length (S.unpack response))
             let reply = [envelope, client, response]
             Zero.sendMulti contentsRouter (fromList reply)
+            when d $ liftIO $ putStrLn $ "sent contents reply"
             
 
   where
@@ -240,13 +244,16 @@ readerProgram (Options d w pool user broker) quitV = do
 
     dV <- newMVar Map.empty
 
+    storageV <- newMVar (Storage Map.empty Map.empty [] 0)
+
     let u = Mutexes {
         inbound = msgV,
         outbound = outC,
         telemetry = telC,
         directory = dV,
         contentsIn = contentsV,
-        contentsOut = contentsC
+        contentsOut = contentsC,
+        storage = storageV
     }
 
     -- Startup reader threads
